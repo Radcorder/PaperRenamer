@@ -19,3 +19,27 @@ Click **"Start Processing"** and wait for a moment.
 ### Step 4: Download
 Click **"Download ZIP"** to get your renamed files.
 ![Download](img/step4.png)
+
+---
+
+## 🛠️ Environment & Compatibility
+This tool is built with **stlite** (Streamlit for the browser) and runs entirely in your web browser using WebAssembly.
+* **Tested Browsers**: Google Chrome (Recommended), Microsoft Edge, Firefox, and Safari. 
+* **No Installation**: No Python environment or local installation is required. 
+
+## 🤝 Contributing
+Contributions are welcome! If you have suggestions for new features or find any bugs, please feel free to:
+1. Open an **Issue** to discuss your ideas. 
+2. Submit a **Pull Request** with your improvements. 
+
+## 🔖 Release Notes
+* **v1.0.0 (Current)**: Initial public release. Supports DOI and Title metadata extraction via Crossref API. 
+
+## 📄 License
+This project is licensed under the **MIT License**. 
+
+---
+
+## 🙏 Credits
+* This tool uses the [Crossref API](https://www.crossref.org/) for metadata retrieval.
+* Powered by [Streamlit](https://streamlit.io/) and [stlite](https://github.com/whitphx/stlite).
