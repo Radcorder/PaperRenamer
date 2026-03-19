@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Paper Renamer Web</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.css"/>
+  <style>
+    /* 画面全体を少し整えるためのCSS */
+    body { margin: 0; padding: 0; }
+    #root { height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.js"></script>
+  <script>
+    stlite.mount({
+      requirements: ["pypdf", "requests"],
+      entrypoint: "app.py",
+      files: {
+        "app.py": `
+import streamlit as st
+import pypdf
+import requests
+import re
+import io
+import zipfile
+import time
+
+# --- 設定 ---
+DOI_REGEX = r"10\\.\\d{4,9}/[-._;()/:A-Z0-9]+"
+# ↓↓↓ 小谷さんのCloudflare URLに書き換えてください（末尾のスラッシュ必須） ↓↓↓
+PROXY_URL = "https://rename-logic.research-api-proxy.workers.dev/"
+
+st.set_page_config(page_title="Paper Renamer Web", layout="wide")
+st.title("📄 Paper Renamer Web")
+
+# --- UI: リネームルールの設定 ---
+with st.sidebar:
+    st.header("Naming Convention")
+    options = ["not_use", "Year", "Author", "Title", "Journal"]
+    slots = []
+    for i in range(4):
+        slots.append(st.selectbox(f"Slot {i+1}", options, index=i if i < 3 else 0))
+
+# --- 処理ロジック ---
+def clean_doi(doi):
+    doi = doi.strip()
+    doi = re.sub(r"^https?://(dx\\.)?doi\\.org/", "", doi, flags=re.IGNORECASE)
+    doi = re.sub(r"^doi:", "", doi, flags=re.IGNORECASE)
+    return doi.strip()
+
+def fetch_metadata(doi):
+    doi = clean_doi(doi)
+    full_url = f"{PROXY_URL}https://api.crossref.org/works/{doi}"
+    
+    try:
+        time.sleep(0.5)
+        r = requests.get(full_url, timeout=15)
+        if r.status_code != 200:
+            return None
+            
+        data = r.json().get("message", {})
+        
+        title_list = data.get("title", ["Unknown"])
+        title = title_list[0] if title_list else "Unknown"
+        
+        authors = data.get("author", [])
+        author = authors[0].get("family", "Unknown") if authors else "Unknown"
+        
+        issued = data.get("issued", {}).get("date-parts", [[0]])
+        year = str(issued[0][0]) if issued[0][0] != 0 else "Unknown"
+        
+        journals = data.get("container-title", ["Unknown"])
+        journal = journals[0] if journals else "Unknown"
+        
+        return {"title": title, "year": year, "author": author, "journal": journal}
+    except Exception as e:
+        return None
+
+def extract_doi(pdf_file):
+    try:
+        reader = pypdf.PdfReader(pdf_file)
+        text = ""
+        for i in range(min(len(reader.pages), 3)):
+            text += reader.pages[i].extract_text() or ""
+        match = re.search(DOI_REGEX, text, re.IGNORECASE)
+        return match.group(0) if match else None
+    except:
+        return None
+
+def extract_pdf_preview(pdf_file):
+    try:
+        pdf_file.seek(0)
+        reader = pypdf.PdfReader(pdf_file)
+        meta = reader.metadata or {}
+        meta_title = (meta.get("/Title") or "").strip()
+
+        page_text = ""
+        if len(reader.pages) > 0:
+            page_text = (reader.pages[0].extract_text() or "").strip()
+
+        if meta_title:
+            return meta_title
+        elif page_text:
+            for ln in page_text.splitlines():
+                if ln.strip():
+                    return ln.strip()[:200]
+    except Exception as e:
+        pass
+    return None
+
+def search_crossref_by_title(title):
+    url = f"{PROXY_URL}https://api.crossref.org/works"
+    params = {
+        "query.title": title,
+        "rows": 1,
+        "select": "title,author,issued,container-title"
+    }
+    
+    try:
+        time.sleep(0.5)
+        r = requests.get(url, params=params, timeout=15)
+        if r.status_code != 200:
+            return None
+            
+        items = r.json().get("message", {}).get("items", [])
+        if not items:
+            return None
+            
+        data = items[0]
+        
+        title_list = data.get("title", ["Unknown"])
+        res_title = title_list[0] if title_list else "Unknown"
+        
+        authors = data.get("author", [])
+        author = authors[0].get("family", "Unknown") if authors else "Unknown"
+        
+        issued = data.get("issued", {}).get("date-parts", [[0]])
+        year = str(issued[0][0]) if issued[0][0] != 0 else "Unknown"
+        
+        journals = data.get("container-title", ["Unknown"])
+        journal = journals[0] if journals else "Unknown"
+        
+        return {"title": res_title, "year": year, "author": author, "journal": journal}
+    except Exception as e:
+        return None
+
+def sanitize_filename(name):
+    name = re.sub(r'[\\\\/*?:"<>|]', "_", name)
+    name = re.sub(r"[\\x00-\\x1f\\x7f-\\x9f]", " ", name)
+    name = re.sub(r"\\s+", " ", name).strip(" .")
+    return name
+
+# --- メイン処理 ---
+files = st.file_uploader("PDFファイルをアップロード", type="pdf", accept_multiple_files=True)
+
+if files and st.button("一括処理開始"):
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
+        bar = st.progress(0)
+        
+        for idx, f in enumerate(files):
+            st.write(f"Processing: {f.name}...")
+            
+            meta = None
+            doi = extract_doi(f)
+            
+            if doi:
+                meta = fetch_metadata(doi)
+                
+            if not meta:
+                st.write("  -> DOI未検出のため、タイトル検索を試行中...")
+                title_candidate = extract_pdf_preview(f)
+                if title_candidate:
+                    meta = search_crossref_by_title(title_candidate)
+            
+            if meta:
+                parts = []
+                key_map = {"Year": meta["year"], "Author": meta["author"], "Title": meta["title"], "Journal": meta["journal"]}
+                for s in slots:
+                    if s != "not_use": parts.append(key_map[s])
+                
+                stem = "_".join(parts) if parts else "Unknown"
+                if len(stem) > 150:
+                    stem = stem[:150] + "..."
+                new_name = sanitize_filename(stem) + ".pdf"
+            else:
+                st.warning(f"  -> メタデータ取得失敗: {f.name}")
+                new_name = f"ERROR_{f.name}"
+                
+            f.seek(0)
+            zip_file.writestr(new_name, f.getvalue())
+            bar.progress((idx + 1) / len(files))
+            time.sleep(0.5)
+
+    st.success("完了！")
+    st.download_button("📦 ZIPをダウンロード", zip_buffer.getvalue(), "renamed_papers.zip")
+`
+      }
+    }, document.getElementById("root"));
+  </script>
+</body>
+</html>
