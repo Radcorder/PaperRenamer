@@ -76,12 +76,6 @@
       font-size: 13px;
       margin-top: -16px;
     }
-    .cache-hint {
-      color: #4a5568;
-      font-family: 'Courier New', monospace;
-      font-size: 11px;
-      margin-top: -12px;
-    }
     .dots::after {
       content: '';
       animation: dot 1.4s steps(4,end) infinite;
@@ -100,58 +94,18 @@
 <div id="loading-screen">
   <div class="ring-sm"></div>
   <div class="msg-sm">Initializing<span class="dots"></span></div>
-  <div class="cache-hint" id="cache-hint">Assets will be cached after first load</div>
 </div>
 
 <!-- Processing overlay -->
 <div id="overlay">
   <div class="ring"></div>
   <div class="msg">Processing<span class="dots"></span></div>
-  <div class="sub">Please wait — fetching metadata from Crossref</div>
+  <div class="sub">Please wait — fetching metadata from Crossref (UI may freeze temporarily)</div>
 </div>
 
 <div id="root"></div>
 
 <script>
-// ── Service Worker: cache CDN assets & pyodide wheels ──────────────────────
-const SW_CODE = `
-const CACHE = 'paper-renamer-v1';
-const CDN_PATTERNS = [
-  'cdn.jsdelivr.net',
-  'cdn.pyodide.org',
-  'files.pythonhosted.org',
-  'pypi.org'
-];
-self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
-self.addEventListener('fetch', e => {
-  const url = e.request.url;
-  const isCacheable = CDN_PATTERNS.some(p => url.includes(p));
-  if (!isCacheable) return;
-  e.respondWith(
-    caches.open(CACHE).then(async cache => {
-      const cached = await cache.match(e.request);
-      if (cached) return cached;
-      const fresh = await fetch(e.request);
-      if (fresh.ok) cache.put(e.request, fresh.clone());
-      return fresh;
-    })
-  );
-});
-`;
-
-if ('serviceWorker' in navigator) {
-  const blob = new Blob([SW_CODE], { type: 'application/javascript' });
-  const swUrl = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(swUrl).then(reg => {
-    // Update cache-hint text if SW was already active (= cached run)
-    if (reg.active) {
-      document.getElementById('cache-hint').textContent = 'Loading from cache';
-    }
-  }).catch(() => {});
-}
-// ──────────────────────────────────────────────────────────────────────────
-
 const overlay = document.getElementById('overlay');
 function showOverlay() { overlay.classList.add('on'); }
 function hideOverlay() { overlay.classList.remove('on'); }
