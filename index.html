@@ -2,24 +2,186 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Paper Renamer Web</title>
+  <title>Paper Renamer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.css"/>
   <style>
-    /* 画面全体を少し整えるためのCSS */
     body { margin: 0; padding: 0; }
     #root { height: 100vh; }
+
+    /* Hide sidebar close button */
+    [data-testid="stSidebarCloseButton"] { display: none !important; }
+
+    /* Loading screen */
+    #loading-screen {
+      position: fixed;
+      inset: 0;
+      background: #0e1117;
+      z-index: 99999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      transition: opacity 0.5s ease;
+    }
+    #loading-screen.fade-out { opacity: 0; pointer-events: none; }
+
+    /* Processing overlay */
+    #overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 12, 20, 0.80);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+    }
+    #overlay.on { display: flex; }
+
+    .ring {
+      width: 68px; height: 68px;
+      border: 5px solid rgba(99,179,237,0.15);
+      border-top-color: #63b3ed;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    .ring-sm {
+      width: 44px; height: 44px;
+      border: 4px solid rgba(99,179,237,0.15);
+      border-top-color: #63b3ed;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .msg {
+      color: #e2e8f0;
+      font-family: 'Courier New', monospace;
+      font-size: 20px;
+      letter-spacing: 0.08em;
+    }
+    .msg-sm {
+      color: #a0aec0;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      letter-spacing: 0.06em;
+    }
+    .sub {
+      color: #718096;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      margin-top: -16px;
+    }
+    .cache-hint {
+      color: #4a5568;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      margin-top: -12px;
+    }
+    .dots::after {
+      content: '';
+      animation: dot 1.4s steps(4,end) infinite;
+    }
+    @keyframes dot {
+      0%  { content:'';    }
+      25% { content:'.';   }
+      50% { content:'..';  }
+      75% { content:'...'; }
+    }
   </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.js"></script>
-  <script>
-    stlite.mount({
-      requirements: ["pypdf", "requests"],
-      entrypoint: "app.py",
-      files: {
-        "app.py": `
+
+<!-- Initial loading screen (dismissed once stlite is ready) -->
+<div id="loading-screen">
+  <div class="ring-sm"></div>
+  <div class="msg-sm">Initializing<span class="dots"></span></div>
+  <div class="cache-hint" id="cache-hint">Assets will be cached after first load</div>
+</div>
+
+<!-- Processing overlay -->
+<div id="overlay">
+  <div class="ring"></div>
+  <div class="msg">Processing<span class="dots"></span></div>
+  <div class="sub">Please wait — fetching metadata from Crossref</div>
+</div>
+
+<div id="root"></div>
+
+<script>
+// ── Service Worker: cache CDN assets & pyodide wheels ──────────────────────
+const SW_CODE = `
+const CACHE = 'paper-renamer-v1';
+const CDN_PATTERNS = [
+  'cdn.jsdelivr.net',
+  'cdn.pyodide.org',
+  'files.pythonhosted.org',
+  'pypi.org'
+];
+self.addEventListener('install', e => { self.skipWaiting(); });
+self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', e => {
+  const url = e.request.url;
+  const isCacheable = CDN_PATTERNS.some(p => url.includes(p));
+  if (!isCacheable) return;
+  e.respondWith(
+    caches.open(CACHE).then(async cache => {
+      const cached = await cache.match(e.request);
+      if (cached) return cached;
+      const fresh = await fetch(e.request);
+      if (fresh.ok) cache.put(e.request, fresh.clone());
+      return fresh;
+    })
+  );
+});
+`;
+
+if ('serviceWorker' in navigator) {
+  const blob = new Blob([SW_CODE], { type: 'application/javascript' });
+  const swUrl = URL.createObjectURL(blob);
+  navigator.serviceWorker.register(swUrl).then(reg => {
+    // Update cache-hint text if SW was already active (= cached run)
+    if (reg.active) {
+      document.getElementById('cache-hint').textContent = 'Loading from cache';
+    }
+  }).catch(() => {});
+}
+// ──────────────────────────────────────────────────────────────────────────
+
+const overlay = document.getElementById('overlay');
+function showOverlay() { overlay.classList.add('on'); }
+function hideOverlay() { overlay.classList.remove('on'); }
+
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('button');
+  if (btn && btn.textContent.trim().toLowerCase().includes('start processing')) {
+    showOverlay();
+    waitForResults();
+  }
+}, true);
+
+function waitForResults() {
+  const observer = new MutationObserver(function() {
+    const hasDownload = Array.from(document.querySelectorAll('button'))
+                             .some(b => b.textContent.toLowerCase().includes('download'));
+    if (hasDownload) { hideOverlay(); observer.disconnect(); }
+  });
+  observer.observe(document.getElementById('root'), { childList: true, subtree: true });
+  setTimeout(hideOverlay, 300000);
+}
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.39.0/build/stlite.js"></script>
+<script>
+stlite.mount({
+  requirements: ["pypdf", "requests"],
+  entrypoint: "app.py",
+  files: {
+    "app.py": `
 import streamlit as st
 import pypdf
 import requests
@@ -28,178 +190,188 @@ import io
 import zipfile
 import time
 
-# --- 設定 ---
-DOI_REGEX = r"10\\.\\d{4,9}/[-._;()/:A-Z0-9]+"
-# ↓↓↓ 小谷さんのCloudflare URLに書き換えてください（末尾のスラッシュ必須） ↓↓↓
-PROXY_URL = "https://rename-logic.research-api-proxy.workers.dev/"
+DOI_REGEX = r"10[.][0-9]{4,9}/[-._;()/:A-Za-z0-9]+"
 
-st.set_page_config(page_title="Paper Renamer Web", layout="wide")
-st.title("📄 Paper Renamer Web")
+st.set_page_config(page_title="Paper Renamer", layout="wide")
+st.markdown(
+    "<style>header{visibility:hidden}footer{visibility:hidden}"
+    "[data-testid=stSidebarCloseButton]{display:none!important}</style>",
+    unsafe_allow_html=True
+)
 
-# --- UI: リネームルールの設定 ---
+DUMMY = {
+    "Year":    "2026",
+    "Author":  "Smith",
+    "Title":   "Advanced Dosimetric Analysis of VMAT vs IMRT for Prostate Cancer",
+    "Journal": "Int J Radiat Oncol Biol Phys"
+}
+
+def sanitize(name):
+    name = name.strip()
+    while ": " in name:
+        name = name.replace(": ", " - ")
+    name = name.replace(":", " - ").replace("/", "_").replace(chr(92), "_")  # chr(92) = backslash
+    for c in "?!\\'\\"\x60^~$@#%&+;={}()[],<>|*":
+        name = name.replace(c, "")
+    return " ".join(name.split()).strip(" .")
+
 with st.sidebar:
     st.header("Naming Convention")
     options = ["not_use", "Year", "Author", "Title", "Journal"]
-    slots = []
-    for i in range(4):
-        slots.append(st.selectbox(f"Slot {i+1}", options, index=i if i < 3 else 0))
+    slots = [
+        st.selectbox("Slot 1", options, index=1),
+        st.selectbox("Slot 2", options, index=3),
+        st.selectbox("Slot 3", options, index=2),
+        st.selectbox("Slot 4", options, index=4),
+    ]
+    st.markdown("---")
+    st.subheader("Live Preview")
+    parts = [DUMMY[s] for s in slots if s != "not_use"]
+    stem  = sanitize("_".join(parts)) if parts else "Unknown_Paper"
+    if len(stem) > 150: stem = stem[:150] + "..."
+    st.info(f"📄 **{stem}.pdf**")
 
-# --- 処理ロジック ---
-def clean_doi(doi):
-    doi = doi.strip()
-    doi = re.sub(r"^https?://(dx\\.)?doi\\.org/", "", doi, flags=re.IGNORECASE)
-    doi = re.sub(r"^doi:", "", doi, flags=re.IGNORECASE)
-    return doi.strip()
+def parse_meta(data):
+    try:
+        title   = (data.get("title") or ["Unknown_Title"])[0]
+        authors = data.get("author", [])
+        author  = authors[0].get("family", "Unknown_Author") if authors else "Unknown_Author"
+        year    = "Unknown_Year"
+        for field in ["issued", "published-print", "published-online"]:
+            dp = data.get(field, {}).get("date-parts", [[None]])
+            if dp[0][0]: year = str(dp[0][0]); break
+        journal = (data.get("container-title") or ["Unknown_Journal"])[0]
+        return {"title": title, "year": year, "author": author, "journal": journal}
+    except Exception:
+        return None
 
-def fetch_metadata(doi):
-    doi = clean_doi(doi)
-    full_url = f"{PROXY_URL}https://api.crossref.org/works/{doi}"
-    
+def fetch_by_doi(doi):
+    doi = re.sub(r"^https?://(dx[.])?doi[.]org/", "", doi.strip(), flags=re.IGNORECASE)
     try:
         time.sleep(0.5)
-        r = requests.get(full_url, timeout=15)
-        if r.status_code != 200:
-            return None
-            
-        data = r.json().get("message", {})
-        
-        title_list = data.get("title", ["Unknown"])
-        title = title_list[0] if title_list else "Unknown"
-        
-        authors = data.get("author", [])
-        author = authors[0].get("family", "Unknown") if authors else "Unknown"
-        
-        issued = data.get("issued", {}).get("date-parts", [[0]])
-        year = str(issued[0][0]) if issued[0][0] != 0 else "Unknown"
-        
-        journals = data.get("container-title", ["Unknown"])
-        journal = journals[0] if journals else "Unknown"
-        
-        return {"title": title, "year": year, "author": author, "journal": journal}
-    except Exception as e:
-        return None
+        r = requests.get(f"https://api.crossref.org/works/{doi}",
+                         headers={"User-Agent": "PaperRenamer/1.0"}, timeout=15)
+        if r.status_code == 200: return parse_meta(r.json().get("message", {}))
+    except Exception: pass
+    return None
 
 def extract_doi(pdf_file):
     try:
+        pdf_file.seek(0)
         reader = pypdf.PdfReader(pdf_file)
-        text = ""
-        for i in range(min(len(reader.pages), 3)):
-            text += reader.pages[i].extract_text() or ""
-        match = re.search(DOI_REGEX, text, re.IGNORECASE)
-        return match.group(0) if match else None
-    except:
-        return None
+        text = "".join(reader.pages[i].extract_text() or "" for i in range(min(len(reader.pages), 3)))
+        m = re.search(DOI_REGEX, text, re.IGNORECASE)
+        return m.group(0) if m else None
+    except Exception: return None
 
-def extract_pdf_preview(pdf_file):
+def extract_title_candidate(pdf_file):
     try:
         pdf_file.seek(0)
         reader = pypdf.PdfReader(pdf_file)
-        meta = reader.metadata or {}
-        meta_title = (meta.get("/Title") or "").strip()
+        meta   = reader.metadata or {}
+        title  = (meta.get("/Title") or "").strip()
+        if not title and reader.pages:
+            lines = [l.strip() for l in (reader.pages[0].extract_text() or "").splitlines() if len(l.strip()) > 10]
+            title = lines[0] if lines else ""
+        return " ".join(title[:250].split())
+    except Exception: return None
 
-        page_text = ""
-        if len(reader.pages) > 0:
-            page_text = (reader.pages[0].extract_text() or "").strip()
-
-        if meta_title:
-            return meta_title
-        elif page_text:
-            for ln in page_text.splitlines():
-                if ln.strip():
-                    return ln.strip()[:200]
-    except Exception as e:
-        pass
-    return None
-
-def search_crossref_by_title(title):
-    url = f"{PROXY_URL}https://api.crossref.org/works"
-    params = {
-        "query.title": title,
-        "rows": 1,
-        "select": "title,author,issued,container-title"
-    }
-    
+def search_by_title(title):
+    if not title or len(title) < 10: return None
     try:
         time.sleep(0.5)
-        r = requests.get(url, params=params, timeout=15)
-        if r.status_code != 200:
-            return None
-            
-        items = r.json().get("message", {}).get("items", [])
-        if not items:
-            return None
-            
-        data = items[0]
-        
-        title_list = data.get("title", ["Unknown"])
-        res_title = title_list[0] if title_list else "Unknown"
-        
-        authors = data.get("author", [])
-        author = authors[0].get("family", "Unknown") if authors else "Unknown"
-        
-        issued = data.get("issued", {}).get("date-parts", [[0]])
-        year = str(issued[0][0]) if issued[0][0] != 0 else "Unknown"
-        
-        journals = data.get("container-title", ["Unknown"])
-        journal = journals[0] if journals else "Unknown"
-        
-        return {"title": res_title, "year": year, "author": author, "journal": journal}
-    except Exception as e:
-        return None
+        r = requests.get("https://api.crossref.org/works",
+                         params={"query.title": title, "rows": 1},
+                         headers={"User-Agent": "PaperRenamer/1.0"}, timeout=15)
+        if r.status_code == 200:
+            items = r.json().get("message", {}).get("items", [])
+            if items: return parse_meta(items[0])
+    except Exception: pass
+    return None
 
-def sanitize_filename(name):
-    name = re.sub(r'[\\\\/*?:"<>|]', "_", name)
-    name = re.sub(r"[\\x00-\\x1f\\x7f-\\x9f]", " ", name)
-    name = re.sub(r"\\s+", " ", name).strip(" .")
-    return name
+# ── Session state init ──
+for key, val in [("zip_bytes", None), ("summary", []), ("uploader_key", 0)]:
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-# --- メイン処理 ---
-files = st.file_uploader("PDFファイルをアップロード", type="pdf", accept_multiple_files=True)
+# ── Main UI ──
+files = st.file_uploader(
+    "Upload PDF files",
+    type="pdf",
+    accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}"
+)
 
-if files and st.button("一括処理開始"):
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
-        bar = st.progress(0)
-        
-        for idx, f in enumerate(files):
-            st.write(f"Processing: {f.name}...")
-            
-            meta = None
-            doi = extract_doi(f)
-            
-            if doi:
-                meta = fetch_metadata(doi)
-                
-            if not meta:
-                st.write("  -> DOI未検出のため、タイトル検索を試行中...")
-                title_candidate = extract_pdf_preview(f)
-                if title_candidate:
-                    meta = search_crossref_by_title(title_candidate)
-            
-            if meta:
-                parts = []
-                key_map = {"Year": meta["year"], "Author": meta["author"], "Title": meta["title"], "Journal": meta["journal"]}
-                for s in slots:
-                    if s != "not_use": parts.append(key_map[s])
-                
-                stem = "_".join(parts) if parts else "Unknown"
-                if len(stem) > 150:
-                    stem = stem[:150] + "..."
-                new_name = sanitize_filename(stem) + ".pdf"
-            else:
-                st.warning(f"  -> メタデータ取得失敗: {f.name}")
-                new_name = f"ERROR_{f.name}"
-                
-            f.seek(0)
-            zip_file.writestr(new_name, f.getvalue())
-            bar.progress((idx + 1) / len(files))
-            time.sleep(0.5)
+if files:
+    col_a, col_b, _ = st.columns([1, 1, 3])
+    with col_a:
+        start_btn = st.button("Start Processing", use_container_width=True)
+    with col_b:
+        if st.button("Clear All", use_container_width=True):
+            st.session_state.uploader_key += 1
+            st.session_state.zip_bytes    = None
+            st.session_state.summary      = []
+            st.experimental_rerun()
 
-    st.success("完了！")
-    st.download_button("📦 ZIPをダウンロード", zip_buffer.getvalue(), "renamed_papers.zip")
+    if start_btn:
+        summary = []
+        zip_buf = io.BytesIO()
+
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in files:
+                meta = None
+                doi  = extract_doi(f)
+                if doi: meta = fetch_by_doi(doi)
+                if not meta:
+                    tc = extract_title_candidate(f)
+                    if tc: meta = search_by_title(tc)
+
+                if meta:
+                    key_map = {"Year": meta["year"], "Author": meta["author"],
+                               "Title": meta["title"], "Journal": meta["journal"]}
+                    parts   = [key_map[s] for s in slots if s != "not_use"]
+                    stem    = sanitize("_".join(parts)) if parts else "Unknown_Paper"
+                    if len(stem) > 150: stem = stem[:150] + "..."
+                    new_name = stem + ".pdf"
+                    status   = "Success"
+                else:
+                    new_name = "ERROR_" + f.name
+                    status   = "Error"
+
+                summary.append({"Original": f.name, "Renamed": new_name, "Status": status})
+                f.seek(0)
+                zf.writestr(new_name, f.getvalue())
+
+        st.session_state.zip_bytes = zip_buf.getvalue()
+        st.session_state.summary   = summary
+
+    if st.session_state.zip_bytes:
+        col_dl, _ = st.columns([2, 3])
+        with col_dl:
+            st.download_button(
+                "Download ZIP of Renamed Papers",
+                st.session_state.zip_bytes,
+                "renamed_papers.zip",
+                use_container_width=True
+            )
+        st.subheader("Results")
+        st.table(st.session_state.summary)
 `
-      }
-    }, document.getElementById("root"));
-  </script>
+  }
+}, document.getElementById("root"));
+
+// Dismiss loading screen once stlite signals readiness
+// (watch for the file uploader widget to appear)
+const loadingEl = document.getElementById('loading-screen');
+const readyObs = new MutationObserver(() => {
+  const ready = document.querySelector('[data-testid="stFileUploaderDropzone"], [data-testid="stFileUploader"]');
+  if (ready) {
+    loadingEl.classList.add('fade-out');
+    setTimeout(() => loadingEl.remove(), 600);
+    readyObs.disconnect();
+  }
+});
+readyObs.observe(document.getElementById('root'), { childList: true, subtree: true });
+</script>
 </body>
 </html>
