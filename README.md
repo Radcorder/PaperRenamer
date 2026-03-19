@@ -35,9 +35,10 @@ Contributions are welcome! If you have suggestions for new features or find any 
 ## 🔖 Release Notes
 * **v1.0.0 (Current)**: Initial public release. Supports DOI and Title metadata extraction via Crossref API. 
 
-## 📄 License
+## 📄 License & Disclaimer
 This project is licensed under the **MIT License**. 
 
+**Please note**: This tool is provided for research and educational purposes "as is". I do not provide any guarantee of maintenance or official support. By using this tool, you agree that the author is not responsible for any issues or damages that may occur.
 ---
 
 ## 🙏 Credits
