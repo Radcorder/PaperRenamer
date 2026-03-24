@@ -208,7 +208,7 @@ def fetch_by_doi(doi):
         try:
             time.sleep(0.4)
             r = requests.get(f"https://api.crossref.org/works/{candidate}",
-                             headers={"User-Agent": "PaperRenamer/1.0 (mailto:test@example.com)"}, timeout=15)
+                             headers={"User-Agent": "PaperRenamer/1.0 (mailto:your-email@example.com)"}, timeout=15)
             if r.status_code == 200:
                 return parse_meta(r.json().get("message", {}))
             elif r.status_code == 404:
