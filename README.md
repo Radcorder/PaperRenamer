@@ -75,6 +75,10 @@ For regular use, please download the HTML file and replace the email with your o
 
 Failure to follow this guideline may result in API rate limiting or blocking.
 
+## Privacy
+
+This tool may use a simple anonymous counter to measure usage.
+No personal data, files, or identifiable information are collected.
 ---
 
 ## 🙏 Credits
