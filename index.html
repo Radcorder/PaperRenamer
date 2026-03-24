@@ -111,6 +111,7 @@ function hideOverlay() { overlay.classList.remove('on'); }
 document.addEventListener('click', function(e) {
   const btn = e.target.closest('button');
   if (btn && btn.textContent.trim().toLowerCase().includes('start processing')) {
+    countRun();
     showOverlay();
     waitForResults();
   }
@@ -124,6 +125,13 @@ function waitForResults() {
   });
   observer.observe(document.getElementById('root'), { childList: true, subtree: true });
   setTimeout(hideOverlay, 300000);
+}
+</script>
+
+<script>
+function countRun() {
+  fetch("https://api.counterapi.dev/v1/paper-renamer/run/up")
+    .catch(() => {}); // silently ignore failures
 }
 </script>
 
