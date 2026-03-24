@@ -44,10 +44,37 @@ Contributions are welcome! If you have suggestions for new features or find any 
 ## 🔖 Release Notes
 * **v1.0.0 (Current)**: Initial public release. Supports DOI and Title metadata extraction via Crossref API. 
 
-## 📄 License & Disclaimer
-This project is licensed under the **MIT License**. 
+## 📄 License, Disclaimer & API Usage
 
-**Please note**: This tool is provided for research and educational purposes "as is". I do not provide any guarantee of maintenance or official support. By using this tool, you agree that the author is not responsible for any issues or damages that may occur.
+This project is licensed under the **MIT License**.
+
+**Disclaimer**:
+This tool is provided for research and educational purposes "as is".
+The author does not guarantee maintenance, support, or accuracy.
+By using this tool, you agree that the author is not responsible for any issues, damages, or data loss that may occur.
+
+---
+
+## ⚠️ Crossref API Usage
+
+This application uses the Crossref API to retrieve paper metadata.
+
+According to Crossref's API etiquette, you **must include a valid email address** in the User-Agent header so they can contact you in case of excessive requests or issues.
+
+```python
+headers = {"User-Agent": "PaperRenamer/1.0 (mailto:your-email@example.com)"　}
+```
+
+### 🔹 GitHub Pages Version
+
+The hosted demo may use a placeholder email and is intended **for testing purposes only**.
+
+### 🔹 Recommended Usage
+
+For regular use, please download the HTML file and replace the email with your own.
+
+Failure to follow this guideline may result in API rate limiting or blocking.
+
 ---
 
 ## 🙏 Credits
