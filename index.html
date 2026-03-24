@@ -141,6 +141,7 @@ import re
 import io
 import zipfile
 import time
+import random
 
 DOI_REGEX = r"10[.][0-9]{4,9}/[-._;()/:A-Za-z0-9]+"
 
@@ -150,6 +151,12 @@ st.markdown(
     "[data-testid=stSidebarCloseButton]{display:none!important}</style>",
     unsafe_allow_html=True
 )
+
+# ── Request cache (persists within a browser session) ──
+if "doi_cache" not in st.session_state:
+    st.session_state.doi_cache = {}
+if "title_cache" not in st.session_state:
+    st.session_state.title_cache = {}
 
 DUMMY = {
     "Year":    "2026",
@@ -206,7 +213,7 @@ def fetch_by_doi(doi):
         if not candidate or not candidate.startswith("10.") or len(candidate) < 8:
             break
         try:
-            time.sleep(0.4)
+            time.sleep(0.4 + random.random() * 0.5)
             r = requests.get(f"https://api.crossref.org/works/{candidate}",
                              headers={"User-Agent": "PaperRenamer/1.0 (mailto:your-email@example.com)"}, timeout=15)
             if r.status_code == 200:
@@ -308,7 +315,7 @@ def title_similarity(a, b):
 def search_by_title(title):
     if not title or len(title) < 10: return None
     try:
-        time.sleep(0.5)
+        time.sleep(0.4 + random.random() * 0.6)
         r = requests.get("https://api.crossref.org/works",
                          params={"query.title": title, "rows": 3},
                          headers={"User-Agent": "PaperRenamer/1.0 (mailto:test@example.com)"}, timeout=15)
@@ -353,12 +360,26 @@ if files:
             for f in files:
                 meta = None
                 doi  = extract_doi(f)
-                if doi: meta = fetch_by_doi(doi)
-                
+                if doi:
+                    doi_key = doi.lower().strip()
+                    if doi_key in st.session_state.doi_cache:
+                        meta = st.session_state.doi_cache[doi_key]
+                    else:
+                        meta = fetch_by_doi(doi_key)
+                        if meta:
+                            st.session_state.doi_cache[doi_key] = meta
+
                 tc = None
                 if not meta:
                     tc = extract_title_candidate(f)
-                    if tc: meta = search_by_title(tc)
+                    if tc:
+                        tc_key = tc.lower().strip()
+                        if tc_key in st.session_state.title_cache:
+                            meta = st.session_state.title_cache[tc_key]
+                        else:
+                            meta = search_by_title(tc_key)
+                            if meta:
+                                st.session_state.title_cache[tc_key] = meta
 
                 if meta:
                     key_map = {"Year": meta["year"], "Author": meta["author"],
