@@ -90,13 +90,11 @@
 </head>
 <body>
 
-<!-- Initial loading screen (dismissed once stlite is ready) -->
 <div id="loading-screen">
   <div class="ring-sm"></div>
   <div class="msg-sm">Initializing<span class="dots"></span></div>
 </div>
 
-<!-- Processing overlay -->
 <div id="overlay">
   <div class="ring"></div>
   <div class="msg">Processing<span class="dots"></span></div>
@@ -164,8 +162,8 @@ def sanitize(name):
     name = name.strip()
     while ": " in name:
         name = name.replace(": ", " - ")
-    name = name.replace(":", " - ").replace("/", "_").replace(chr(92), "_")  # chr(92) = backslash
-    for c in "?!\\'\\"\x60^~$@#%&+;={}()[],<>|*":
+    name = name.replace(":", " - ").replace("/", "_").replace(chr(92), "_")
+    for c in "?!\\\\'\\"\x60^~$@#%&+;={}()[],<>|*":
         name = name.replace(c, "")
     return " ".join(name.split()).strip(" .")
 
@@ -201,45 +199,125 @@ def parse_meta(data):
 
 def fetch_by_doi(doi):
     doi = re.sub(r"^https?://(dx[.])?doi[.]org/", "", doi.strip(), flags=re.IGNORECASE)
-    try:
-        time.sleep(0.5)
-        r = requests.get(f"https://api.crossref.org/works/{doi}",
-                         headers={"User-Agent": "PaperRenamer/1.0"}, timeout=15)
-        if r.status_code == 200: return parse_meta(r.json().get("message", {}))
-    except Exception: pass
+    # Try the DOI as-is, then progressively trim trailing characters on 404
+    # (handles cases where regex greedily captures trailing digits/chars)
+    candidate = doi
+    for _ in range(6):
+        if not candidate or not candidate.startswith("10.") or len(candidate) < 8:
+            break
+        try:
+            time.sleep(0.4)
+            r = requests.get(f"https://api.crossref.org/works/{candidate}",
+                             headers={"User-Agent": "PaperRenamer/1.0 (mailto:test@example.com)"}, timeout=15)
+            if r.status_code == 200:
+                return parse_meta(r.json().get("message", {}))
+            elif r.status_code == 404:
+                # Trim trailing character and retry
+                candidate = candidate[:-1].rstrip(".,;:)- ")
+            else:
+                break
+        except Exception:
+            break
     return None
 
 def extract_doi(pdf_file):
+    """DOI extraction: text-based (original proven approach) + metadata + raw bytes bonus"""
     try:
         pdf_file.seek(0)
-        reader = pypdf.PdfReader(pdf_file)
+        pdf_bytes = pdf_file.read()
+        pdf_file.seek(0)
+
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+
+        # Strategy 0: PDF metadata fields
+        meta = reader.metadata or {}
+        for key in ["/doi", "/DOI", "/Subject", "/Keywords", "/WPS-ARTICLEDOI"]:
+            val = str(meta.get(key) or "")
+            if val:
+                m = re.search(DOI_REGEX, val, re.IGNORECASE)
+                if m:
+                    return m.group(0).rstrip(".,;:)")
+
+        # Strategy 1: Text extraction — original proven approach
+        # Use "".join (no separator) to avoid splitting DOIs across page boundaries
         text = "".join(reader.pages[i].extract_text() or "" for i in range(min(len(reader.pages), 3)))
         m = re.search(DOI_REGEX, text, re.IGNORECASE)
-        return m.group(0) if m else None
-    except Exception: return None
+        if m:
+            return m.group(0).rstrip(".,;:)")
+
+        # Strategy 2: Raw PDF bytes — catches DOIs in hyperlink annotations
+        raw_head = pdf_bytes[:300000].decode("latin-1", errors="ignore")
+        m = re.search(r"doi[.]org/(" + DOI_REGEX + ")", raw_head, re.IGNORECASE)
+        if m:
+            return m.group(1).rstrip(".,;:)")
+
+        return None
+    except Exception:
+        return None
 
 def extract_title_candidate(pdf_file):
     try:
         pdf_file.seek(0)
-        reader = pypdf.PdfReader(pdf_file)
+        pdf_bytes = pdf_file.read()
+        pdf_file.seek(0)
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         meta   = reader.metadata or {}
         title  = (meta.get("/Title") or "").strip()
+        
+        # Discard unhelpful PDF metadata
+        skip_meta = ["untitled", "microsoft", "doi", ".pdf", "arxiv", "template"]
+        if not title or any(s in title.lower() for s in skip_meta) or len(title) < 5:
+            title = ""
+            
         if not title and reader.pages:
-            lines = [l.strip() for l in (reader.pages[0].extract_text() or "").splitlines() if len(l.strip()) > 10]
-            title = lines[0] if lines else ""
-        return " ".join(title[:250].split())
+            skip_lines = [
+                "cite this", "downloaded", "copyright", "rights reserved",
+                "open access", "creative commons", "license", "elsevier",
+                "springer", "wiley", "oxford", "published by", "received",
+                "accepted", "available online", "journal homepage",
+                "correspondence", "author", "e-mail", "email",
+                "vol.", "volume", "page ", "pages ", "pp.", "issn",
+                "www.", "http", "all rights", "peer review",
+                "editorial", "dear editor", "to the editor",
+                "article info", "article history", "keyword",
+                "abstract", "introduction", "original",
+                "review article", "research article", "case report",
+            ]
+            lines = [l.strip() for l in (reader.pages[0].extract_text() or "").splitlines()]
+            for l in lines:
+                ll = l.lower()
+                if (len(l) > 15
+                    and "doi" not in ll
+                    and not any(s in ll for s in skip_lines)
+                    and any(c.isalpha() for c in l)
+                    and sum(c.isalpha() for c in l) > len(l) * 0.4):
+                    title = l
+                    break
+                    
+        return " ".join(title[:250].split()) if title else None
     except Exception: return None
+
+def title_similarity(a, b):
+    """Simple word overlap similarity between two titles"""
+    if not a or not b: return 0.0
+    sa = set(w.lower() for w in re.findall(r"[a-zA-Z]{3,}", a))
+    sb = set(w.lower() for w in re.findall(r"[a-zA-Z]{3,}", b))
+    if not sa or not sb: return 0.0
+    return len(sa & sb) / max(len(sa), len(sb))
 
 def search_by_title(title):
     if not title or len(title) < 10: return None
     try:
         time.sleep(0.5)
         r = requests.get("https://api.crossref.org/works",
-                         params={"query.title": title, "rows": 1},
-                         headers={"User-Agent": "PaperRenamer/1.0"}, timeout=15)
+                         params={"query.title": title, "rows": 3},
+                         headers={"User-Agent": "PaperRenamer/1.0 (mailto:test@example.com)"}, timeout=15)
         if r.status_code == 200:
             items = r.json().get("message", {}).get("items", [])
-            if items: return parse_meta(items[0])
+            for item in items:
+                result_title = (item.get("title") or [""])[0]
+                if title_similarity(title, result_title) >= 0.2:
+                    return parse_meta(item)
     except Exception: pass
     return None
 
@@ -276,6 +354,8 @@ if files:
                 meta = None
                 doi  = extract_doi(f)
                 if doi: meta = fetch_by_doi(doi)
+                
+                tc = None
                 if not meta:
                     tc = extract_title_candidate(f)
                     if tc: meta = search_by_title(tc)
@@ -292,7 +372,14 @@ if files:
                     new_name = "ERROR_" + f.name
                     status   = "Error"
 
-                summary.append({"Original": f.name, "Renamed": new_name, "Status": status})
+                summary.append({
+                    "Original": f.name, 
+                    "Renamed": new_name, 
+                    "Status": status,
+                    "Detected DOI": doi if doi else "-",
+                    "Title Fallback": tc if tc else "-"
+                })
+                
                 f.seek(0)
                 zf.writestr(new_name, f.getvalue())
 
@@ -309,13 +396,11 @@ if files:
                 use_container_width=True
             )
         st.subheader("Results")
-        st.table(st.session_state.summary)
+        st.dataframe(st.session_state.summary, use_container_width=True)
 `
   }
 }, document.getElementById("root"));
 
-// Dismiss loading screen once stlite signals readiness
-// (watch for the file uploader widget to appear)
 const loadingEl = document.getElementById('loading-screen');
 const readyObs = new MutationObserver(() => {
   const ready = document.querySelector('[data-testid="stFileUploaderDropzone"], [data-testid="stFileUploader"]');
